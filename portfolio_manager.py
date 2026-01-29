@@ -121,17 +121,31 @@ def update_portfolio_values():
                 symbol = row['Symbol']
                 try:
                     ticker = yf.Ticker(symbol)
-                    price = ticker.fast_info.last_price
-                    if not price:
-                        price = ticker.info.get('currentPrice', ticker.info.get('regularMarketPrice'))
+                    # Try to get detailed data for change %
+                    # fast_info provides last_price, previous_close
+                    last_price = ticker.fast_info.last_price
+                    prev_close = ticker.fast_info.previous_close
                     
-                    if price:
-                        current_val = row['Quantity'] * price
+                    if not last_price:
+                         # Fallback
+                         info = ticker.info
+                         last_price = info.get('currentPrice', info.get('regularMarketPrice'))
+                         prev_close = info.get('previousClose', last_price) # avoid div0 if missing
+
+                    if last_price:
+                        current_val = row['Quantity'] * last_price
                         roi = ((current_val - row['Initial Value']) / row['Initial Value']) * 100
                         
-                        portfolio.at[index, 'Current Price'] = round(price, 2)
+                        # Calculate Daily Change %
+                        daily_change = 0.0
+                        if prev_close and prev_close > 0:
+                            daily_change = ((last_price - prev_close) / prev_close) * 100
+                        
+                        portfolio.at[index, 'Current Price'] = round(last_price, 2)
                         portfolio.at[index, 'Current Value'] = round(current_val, 2)
                         portfolio.at[index, 'Return %'] = round(roi, 2)
+                        portfolio.at[index, 'Daily Change %'] = round(daily_change, 2)
+                        
                         updated = True
                 except:
                     pass
@@ -146,6 +160,8 @@ def update_portfolio_values():
         except Exception as e:
             print(f"Error updating {filepath}: {e}")
 
+    generate_active_watchlist()
+
     print(f"\nAll portfolios updated.")
     
     # Grand Total
@@ -156,6 +172,32 @@ def update_portfolio_values():
     print(f"Total Invested (All Time): ${total_invested_all:,.2f}")
     print(f"Current Value (All Time):  ${total_value_all:,.2f}")
     print(f"Total Return:              {total_ret:.2f}%")
+    print(f"\n[Watchlist Updated: Active_Watchlist_Summary.csv]")
+
+def generate_active_watchlist():
+    """Consolidates all daily portfolios into a single Summary CSV."""
+    files = glob.glob(os.path.join(PORTFOLIOS_DIR, "Portfolio_*.csv"))
+    all_positions = []
+    
+    for f in files:
+        try:
+            df = pd.read_csv(f)
+            # Add 'Scan Date' if not present, but 'Date' column is usually the scan date
+            all_positions.append(df)
+        except:
+            pass
+            
+    if all_positions:
+        master_df = pd.concat(all_positions, ignore_index=True)
+        # Sort by Date desc, then Symbol
+        master_df = master_df.sort_values(by=['Date', 'Symbol'], ascending=[False, True])
+        
+        # Ensure 'Daily Change %' exists if it wasn't there before
+        if 'Daily Change %' not in master_df.columns:
+            master_df['Daily Change %'] = 0.0
+            
+        master_df.to_csv("Active_Watchlist_Summary.csv", index=False)
+
 
 if __name__ == "__main__":
     update_portfolio_values()
